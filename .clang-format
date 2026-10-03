@@ -1,0 +1,31 @@
+BasedOnStyle: Google
+Language: Cpp
+IndentWidth: 2
+ContinuationIndentWidth: 2
+UseTab: Never
+ColumnLimit: 250
+AllowShortFunctionsOnASingleLine: All
+AllowShortEnumsOnASingleLine: true
+AlwaysBreakTemplateDeclarations: Yes
+FixNamespaceComments: true
+PointerAlignment: Left
+ReferenceAlignment: Left
+BreakConstructorInitializers: BeforeColon
+Cpp11BracedListStyle: true
+SpaceBeforeParens: ControlStatements
+AlignTrailingComments: true
+SortIncludes: CaseInsensitive
+IncludeBlocks: Regroup
+IncludeCategories:
+  - Regex: '^"Aurivis/'
+    Priority: 1
+  - Regex: '^<Aurivis/'
+    Priority: 1
+  - Regex: '^"'
+    Priority: 2
+  - Regex: '^<'
+    Priority: 3
+BinPackArguments: false
+AlignConsecutiveAssignments: false
+AlignConsecutiveDeclarations: false
+MaxEmptyLinesToKeep: 1

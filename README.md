@@ -30,7 +30,7 @@ Header-only C++20 with a small Python API. No runtime dependencies.
 
 | Feature | Status |
 |---|---|
-| x86 detection (SSE2 to AVX-512) | ❌ |
+| x86 detection (SSE2 to AVX-512) | ✅ |
 | Dispatch tables | ❌ |
 | `AlignedBuffer`, `Pool` | ❌ |
 | Python API | ❌ |
@@ -46,6 +46,21 @@ Header-only C++20 with a small Python API. No runtime dependencies.
 | `Avx2` | x86-64-v3: AVX, AVX2, FMA, BMI1, BMI2, F16C, LZCNT, MOVBE |
 | `Avx512` | x86-64-v4: AVX-512 F, BW, CD, DQ, VL |
 | `Neon` | ARMv8 Advanced SIMD |
+
+## Benchmarks
+
+Compared with [Google Highway](https://github.com/google/highway) 1.4.0.
+Intel Core i7-11700F, Windows 11, MSVC 2022, Release build. Median of 9 runs.
+
+| Operation | aurivis-simd | Highway |
+|---|---|---|
+| Repeated feature query | **≈ 0 ns** ¹ | 341 ns ² |
+| Detection without cache | **331 ns** | 341 ns |
+| First call in a fresh process | 2.1 µs | **0.6 µs** ³ |
+
+¹ Not measurable: as fast as an empty loop iteration (1.6 ns).<br>
+² `hwy::SupportedTargets()` runs the detection again on every call. Highway caches its dispatch choice separately.<br>
+³ The difference comes from the operating system mapping the code page on first use (about 1 µs), not from the detection itself. It is paid once per process.
 
 ## Installation
 
@@ -106,9 +121,12 @@ The headers are compiled into your extension, so `aurivis-simd` is not needed at
 ```cpp
 #include "Aurivis/Simd/Simd.hpp"
 
-const Aurivis::Simd::Level level = Aurivis::Simd::GetActiveLevel();
 const Aurivis::Simd::CpuFeatures& features = Aurivis::Simd::Detect();
+const Aurivis::Simd::Level best = Aurivis::Simd::GetBestLevel();
+const Aurivis::Simd::Level active = Aurivis::Simd::GetActiveLevel();
 ```
+
+`Detect()` runs once and caches the result. `GetBestLevel()` is the highest level the machine supports. `GetActiveLevel()` is the level dispatch uses, lowered by `AURIVIS_SIMD` if set. All three are thread-safe.
 
 ### Dispatch
 
@@ -162,7 +180,7 @@ if GetActiveLevel() == Level.Avx2:
 AURIVIS_SIMD=generic python app.py
 ```
 
-Accepted values: `generic`, `sse41`, `avx2`, `avx512`, `neon`. The variable can only lower the level, never raise it above what the CPU supports.
+Accepted values: `generic`, `sse41`, `avx2`, `avx512`, `neon`. The variable can only lower the level, never raise it above what the CPU supports. Invalid values are ignored.
 
 ## Requirements
 

@@ -31,7 +31,7 @@ Header-only C++20 with a small Python API. No runtime dependencies.
 | Feature | Status |
 |---|---|
 | x86 detection (SSE2 to AVX-512) | ✅ |
-| Dispatch tables | ❌ |
+| Dispatch tables | ✅ |
 | `AlignedBuffer`, `Pool` | ❌ |
 | Python API | ❌ |
 | ARM detection (NEON, dotprod, SVE, SVE2) | ❌ |
@@ -52,11 +52,21 @@ Header-only C++20 with a small Python API. No runtime dependencies.
 Compared with [Google Highway](https://github.com/google/highway) 1.4.0.
 Intel Core i7-11700F, Windows 11, MSVC 2022, Release build. Median of 9 runs.
 
+### Detection
+
 | Operation | aurivis-simd | Highway |
 |---|---|---|
 | Repeated feature query | **≈ 0 ns** ¹ | 341 ns ² |
 | Detection without cache | **331 ns** | 341 ns |
 | First call in a fresh process | 2.1 µs | **0.6 µs** ³ |
+
+### Dispatch
+
+| Operation | aurivis-simd | Highway |
+|---|---|---|
+| Select on every call | **1.17 ns** | 1.41 ns |
+| Cached function pointer | **0.93 ns** | 0.94 ns |
+| Direct call, for reference | 0.70 ns | 0.70 ns |
 
 ¹ Not measurable: as fast as an empty loop iteration (1.6 ns).<br>
 ² `hwy::SupportedTargets()` runs the detection again on every call. Highway caches its dispatch choice separately.<br>
@@ -133,16 +143,26 @@ const Aurivis::Simd::Level active = Aurivis::Simd::GetActiveLevel();
 ```cpp
 using TransformFn = void (*)(const int16_t* input, uint8_t* output, size_t stride);
 
-const Aurivis::Simd::DispatchTable<TransformFn> table{
+AURIVIS_TARGET_AVX2 void TransformAvx2(const int16_t* input, uint8_t* output, size_t stride);
+
+static const Aurivis::Simd::DispatchTable<TransformFn> table{
     .generic = &TransformGeneric,
     .sse41 = &TransformSse41,
     .avx2 = &TransformAvx2,
 };
 
-const TransformFn transform = table.Select();
+table.Select()(input, output, stride);
 ```
 
-`Select()` returns the best entry that is not above the active level. Missing entries fall back to the next lower level, and finally to `generic`.
+`Select()` returns the best entry that is not above the active level. Missing entries fall back to the next lower level, and finally to `generic`, which is required. The choice is cached in the table after the first call, so calling `Select()` every time is cheap. Tables cannot be copied, so declare them once as `static const`.
+
+Mark each implementation with its `AURIVIS_TARGET_*` macro, so GCC and Clang allow the matching intrinsics without compiling the whole file for that level.
+
+To test a specific implementation, use `SelectFor()`:
+
+```cpp
+const TransformFn fallback = table.SelectFor(Aurivis::Simd::Level::Generic);
+```
 
 ### Aligned memory
 

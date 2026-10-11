@@ -22,7 +22,7 @@ Header-only C++20 with a small Python API. No runtime dependencies.
 - Detects CPU features at runtime, including whether the operating system allows AVX and AVX-512 registers
 - Picks the fastest available implementation of a function with a dispatch table
 - Lets you limit the SIMD level with the `AURIVIS_SIMD` environment variable for testing and bug reports
-- Allocates SIMD-aligned memory with RAII buffers and a thread-safe buffer pool
+- Allocates SIMD-aligned memory with RAII buffers and a sharded, thread-safe buffer pool
 - Ships its headers inside the wheel, so other extensions can build against them
 - Provides Cython declarations for `cimport`
 
@@ -32,7 +32,7 @@ Header-only C++20 with a small Python API. No runtime dependencies.
 |---|---|
 | x86 detection (SSE2 to AVX-512) | ✅ |
 | Dispatch tables | ✅ |
-| `AlignedBuffer`, `Pool` | ❌ |
+| `AlignedBuffer`, `Pool` | ✅ |
 | Python API | ❌ |
 | ARM detection (NEON, dotprod, SVE, SVE2) | ❌ |
 | Portable vector types (`Vec128`, `Vec256`, `Vec512`) | ❌ |
@@ -68,9 +68,19 @@ Intel Core i7-11700F, Windows 11, MSVC 2022, Release build. Median of 9 runs.
 | Cached function pointer | **0.93 ns** | 0.94 ns |
 | Direct call, for reference | 0.70 ns | 0.70 ns |
 
+### Aligned memory
+
+| Operation | `AlignedBuffer` | `Pool::Acquire()` | `hwy::AllocateAligned` |
+|---|---|---|---|
+| 2 KB | 35 ns | **13.8 ns** | 48 ns |
+| 64 KB | 93 ns | **13.8 ns** | 125 ns |
+| 1080p frame (3 MB) | 7.0 µs | **13.8 ns** | 7.2 µs |
+| 2 KB, 8 threads at once ⁴ | 41 ns | **2.2 ns** | – |
+
 ¹ Not measurable: as fast as an empty loop iteration (1.6 ns).<br>
 ² `hwy::SupportedTargets()` runs the detection again on every call. Highway caches its dispatch choice separately.<br>
-³ The difference comes from the operating system mapping the code page on first use (about 1 µs), not from the detection itself. It is paid once per process.
+³ The difference comes from the operating system mapping the code page on first use (about 1 µs), not from the detection itself. It is paid once per process.<br>
+⁴ Throughput of all threads together. Each thread acquires, writes and returns a buffer in a loop.
 
 ## Installation
 
@@ -171,17 +181,20 @@ Aurivis::Simd::AlignedBuffer<int16_t> coefficients(32 * 32);
 int16_t* data = coefficients.GetData();
 ```
 
-Buffers are 64-byte aligned by default.
+Buffers are 64-byte aligned by default and can be moved but not copied. The memory is not initialized. Invalid alignments throw `std::invalid_argument`, failed allocations throw `std::bad_alloc`.
 
 ### Buffer pool
 
 ```cpp
 Aurivis::Simd::Pool<uint8_t> framePool(1920 * 1080 * 3 / 2);
+framePool.Reserve(8);
 
 auto frame = framePool.Acquire();
 ```
 
-The buffer goes back to the pool when `frame` goes out of scope. `Acquire()` is thread-safe.
+The buffer goes back to the pool when `frame` goes out of scope, or when you call `frame.Reset()`. `Reserve()` allocates buffers in advance, so playback never waits for the operating system.
+
+`Acquire()` is thread-safe, and buffers may be returned from any thread. Each thread works on its own shard, so threads rarely wait for each other. A buffer may outlive its pool; it is then freed when it is destroyed.
 
 ## Cython
 

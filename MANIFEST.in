@@ -1,0 +1,4 @@
+include LICENSE README.md
+include aurivis_simd/py.typed
+recursive-include aurivis_simd *.py *.pyi *.pyx *.pxd
+recursive-include aurivis_simd/include *.hpp

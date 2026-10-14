@@ -43,162 +43,444 @@ It also comes with the memory tools that SIMD code needs: buffers aligned to 64 
 pip install aurivis-simd
 ```
 
-If you only want to build against the C++ headers, see [Building your own extension](#building-your-own-extension).
+The package contains both the Python module and the C++ headers.
 
-## Using it from Python
+## Example: what can this CPU do? (Python)
+
+Save this as `cpu_info.py`:
 
 ```python
 from aurivis_simd import Cpu, Level
 
-Cpu.best_level()
-# Level.AVX512
+class CpuReport:
+    """Prints what the current machine supports."""
 
-Cpu.supports(Level.AVX2)
-# True
+    @staticmethod
+    def show() -> None:
+        print(f'Best level:   {Cpu.best_level().name}')
+        print(f'Active level: {Cpu.active_level().name}')
+        print()
+        for level in Level:
+            print(f'  {level.name:<8} {"yes" if Cpu.supports(level) else "no"}')
+        print()
+        features = Cpu.features()
+        print(f'AVX2 + FMA:       {features.avx2 and features.fma}')
+        print(f'AVX-512 VNNI:     {features.avx512vnni}')
 
-features = Cpu.features()
-features.avx2
-# True
+if __name__ == '__main__':
+    CpuReport.show()
 ```
 
-The detection runs once, when you import the package. After that, every call just returns the stored result. If you check features inside a hot loop, keep the `features` object around instead of calling `Cpu.features()` each time.
+Run it with `python cpu_info.py`. On an Intel Core i7-11700F it prints:
 
-`Cpu.active_level()` is the level your code should actually use. Normally it's the same as `best_level()`, but you can lower it with the `AURIVIS_SIMD` environment variable, which is handy for testing (see [Testing the fallbacks](#testing-the-fallbacks)).
+```
+Best level:   AVX512
+Active level: AVX512
+
+  GENERIC  yes
+  SSE41    yes
+  AVX2     yes
+  AVX512   yes
+  NEON     no
+
+AVX2 + FMA:       True
+AVX-512 VNNI:     True
+```
+
+The detection runs once, when you import the package. After that, every call just returns the stored result, so you can call `Cpu.features()` as often as you like. In a hot loop it's still a little faster to keep the `features` object around.
+
+`best_level()` is the highest level the machine supports. `active_level()` is the one your code should use. They're the same unless you lower it with the `AURIVIS_SIMD` environment variable (see [Testing the fallbacks](#testing-the-fallbacks)).
 
 Everything is typed and ships with `py.typed`, so your editor knows every attribute and return type, and the package passes `mypy --strict`.
 
-## Using it from C++
+## Example: choosing the fastest implementation (C++)
 
-Include the umbrella header and you have everything:
+This is what the library is really for. The program below sums a million floats. It contains a plain version, an AVX2 version and an AVX-512 version of the same function, and lets aurivis-simd pick the fastest one the machine can run. Save it as `sum.cpp`:
 
 ```cpp
 #include "Aurivis/Simd/Simd.hpp"
-```
 
-### Finding out what the CPU can do
+#include <cstddef>
+#include <cstdio>
 
-```cpp
-const Aurivis::Simd::CpuFeatures& features = Aurivis::Simd::Detect();
+#if AURIVIS_ARCH_X86_64
+#include <immintrin.h>
+#endif
 
-if (features.avx2) {
-    // ...
+using SumFn = float (*)(const float* values, size_t count);
+
+float SumGeneric(const float* values, size_t count) {
+  float total = 0.0f;
+  for (size_t i = 0; i < count; ++i) {
+    total += values[i];
+  }
+  return total;
+}
+
+#if AURIVIS_ARCH_X86_64
+
+AURIVIS_TARGET_AVX2 float SumAvx2(const float* values, size_t count) {
+  __m256 total = _mm256_setzero_ps();
+  size_t i = 0;
+  for (; i + 8 <= count; i += 8) {
+    total = _mm256_add_ps(total, _mm256_load_ps(values + i));
+  }
+  alignas(32) float lanes[8];
+  _mm256_store_ps(lanes, total);
+  float sum = 0.0f;
+  for (const float lane : lanes) {
+    sum += lane;
+  }
+  for (; i < count; ++i) {
+    sum += values[i];
+  }
+  return sum;
+}
+
+AURIVIS_TARGET_AVX512 float SumAvx512(const float* values, size_t count) {
+  __m512 total = _mm512_setzero_ps();
+  size_t i = 0;
+  for (; i + 16 <= count; i += 16) {
+    total = _mm512_add_ps(total, _mm512_load_ps(values + i));
+  }
+  float sum = _mm512_reduce_add_ps(total);
+  for (; i < count; ++i) {
+    sum += values[i];
+  }
+  return sum;
+}
+
+static const Aurivis::Simd::DispatchTable<SumFn> SUM{.generic = &SumGeneric, .avx2 = &SumAvx2, .avx512 = &SumAvx512};
+
+#else
+
+static const Aurivis::Simd::DispatchTable<SumFn> SUM{.generic = &SumGeneric};
+
+#endif
+
+int main() {
+  // 64-byte aligned, so the AVX2 and AVX-512 versions can use aligned loads.
+  Aurivis::Simd::AlignedBuffer<float> values(1'000'000);
+  for (size_t i = 0; i < values.GetCount(); ++i) {
+    values[i] = static_cast<float>(i % 10);
+  }
+
+  const SumFn fastest = SUM.Select();
+  const SumFn plain = SUM.SelectFor(Aurivis::Simd::Level::Generic);
+
+  std::printf("Active level: %s\n", Aurivis::Simd::LevelToString(Aurivis::Simd::GetActiveLevel()));
+  std::printf("Fastest sum:  %.0f\n", fastest(values.GetData(), values.GetCount()));
+  std::printf("Generic sum:  %.0f\n", plain(values.GetData(), values.GetCount()));
+  return 0;
 }
 ```
 
-`Detect()` checks the CPU on the first call and remembers the result, so you can call it as often as you like. A feature only counts as available when the operating system supports it too. Some systems can disable AVX even though the CPU has it, and that case is handled for you.
+The headers come with the Python package, so `Headers.get_include()` tells the compiler where to find them.
 
-### Picking the fastest implementation
+On Windows, in a **Developer PowerShell for VS 2022**:
 
-This is what the library is really for. Write your function once per level, put the versions into a `DispatchTable` and let it choose:
-
-```cpp
-using TransformFn = void (*)(const int16_t* input, uint8_t* output, size_t stride);
-
-void TransformGeneric(const int16_t* input, uint8_t* output, size_t stride);
-AURIVIS_TARGET_SSE41 void TransformSse41(const int16_t* input, uint8_t* output, size_t stride);
-AURIVIS_TARGET_AVX2 void TransformAvx2(const int16_t* input, uint8_t* output, size_t stride);
-
-static const Aurivis::Simd::DispatchTable<TransformFn> transform{
-    .generic = &TransformGeneric,
-    .sse41 = &TransformSse41,
-    .avx2 = &TransformAvx2,
-};
-
-transform.Select()(input, output, stride);
+```powershell
+$include = python -c "import aurivis_simd; print(aurivis_simd.Headers.get_include())"
+cl /std:c++20 /O2 /EHsc /I $include sum.cpp
+.\sum.exe
 ```
 
-You don't have to fill in every level. If there's no AVX2 version, the table falls back to SSE4.1, and in the end to `generic`, which is the only one you must provide. The choice is made once and then cached in the table, so calling `Select()` every time costs about as much as a regular function call.
+On Linux and macOS:
 
-The `AURIVIS_TARGET_*` macros tell GCC and Clang that a function may use the instructions of that level. That way, one source file can contain the plain version and the AVX2 version side by side.
-
-To test a specific version, for example to check that the AVX2 version gives the same result as the plain one, use `SelectFor()`:
-
-```cpp
-const TransformFn plain = transform.SelectFor(Aurivis::Simd::Level::Generic);
+```bash
+g++ -std=c++20 -O2 -I"$(python -c 'import aurivis_simd; print(aurivis_simd.Headers.get_include())')" sum.cpp -o sum
+./sum
 ```
 
-### Aligned memory
+Output:
 
-SIMD instructions are fastest when data starts at an aligned address. `AlignedBuffer` takes care of that:
-
-```cpp
-Aurivis::Simd::AlignedBuffer<int16_t> coefficients(32 * 32);
-int16_t* data = coefficients.GetData();
+```
+Active level: avx512
+Fastest sum:  4500000
+Generic sum:  4500000
 ```
 
-Buffers are aligned to 64 bytes by default and are freed automatically. They can be moved but not copied, so it's always clear who owns the memory. The memory isn't zeroed, because SIMD code usually overwrites it right away anyway.
+A few things worth knowing:
 
-### Reusing buffers with a pool
+- Each SIMD version is marked with its `AURIVIS_TARGET_*` macro. GCC and Clang only allow AVX2 intrinsics in functions marked for AVX2, and this is how one file can contain all versions side by side. MSVC doesn't need the macros, they're simply empty there.
+- You don't have to fill in every level. This table has no SSE4.1 entry, so an SSE4.1 machine falls back to `generic`, which is the only entry you must provide.
+- `Select()` makes the choice once and caches it in the table. Calling it every time costs about as much as a normal function call.
+- `SelectFor(Level::Generic)` returns a specific version. Here it checks that the fast version gives the same result as the plain one.
+- On ARM the SIMD versions aren't compiled at all, and the program just uses `SumGeneric`.
 
-If you need the same kind of buffer over and over, like one per video frame, a `Pool` is much faster than allocating each time:
+## Example: reusing frame buffers across threads (C++)
+
+Video players need a fresh buffer for every frame, often 60 times a second, and usually on more than one thread. A `Pool` hands out buffers and takes them back, so memory is only allocated a few times. In this program a decoder thread fills frames and a renderer thread shows them. Save it as `frames.cpp`:
 
 ```cpp
-Aurivis::Simd::Pool<uint8_t> frames(1920 * 1080 * 3 / 2);
-frames.Reserve(8);
+#include "Aurivis/Simd/Simd.hpp"
 
-auto frame = frames.Acquire();
+#include <condition_variable>
+#include <cstdint>
+#include <cstdio>
+#include <deque>
+#include <mutex>
+#include <thread>
+#include <utility>
+
+using Frame = Aurivis::Simd::Pool<uint8_t>::Buffer;
+
+int main() {
+  constexpr int FRAME_COUNT = 1000;
+  constexpr size_t QUEUE_LIMIT = 4;
+
+  // One 1080p YUV 4:2:0 frame per buffer. Four are allocated up front.
+  Aurivis::Simd::Pool<uint8_t> pool(1920 * 1080 * 3 / 2);
+  pool.Reserve(QUEUE_LIMIT);
+
+  std::mutex mutex;
+  std::condition_variable changed;
+  std::deque<Frame> queue;
+
+  // The decoder takes a buffer from the pool, fills it and hands it over.
+  std::thread decoder([&] {
+    for (int i = 0; i < FRAME_COUNT; ++i) {
+      Frame frame = pool.Acquire();
+      frame[0] = static_cast<uint8_t>(i);
+      std::unique_lock<std::mutex> lock(mutex);
+      changed.wait(lock, [&] { return queue.size() < QUEUE_LIMIT; });
+      queue.push_back(std::move(frame));
+      changed.notify_all();
+    }
+  });
+
+  // The renderer shows the frame. When `frame` goes out of scope, the buffer returns to the pool.
+  std::thread renderer([&] {
+    for (int i = 0; i < FRAME_COUNT; ++i) {
+      std::unique_lock<std::mutex> lock(mutex);
+      changed.wait(lock, [&] { return !queue.empty(); });
+      Frame frame = std::move(queue.front());
+      queue.pop_front();
+      changed.notify_all();
+    }
+  });
+
+  decoder.join();
+  renderer.join();
+
+  std::printf("Frames decoded:    %d\n", FRAME_COUNT);
+  std::printf("Buffers allocated: %zu\n", pool.GetIdleCount());
+  return 0;
+}
 ```
 
-When `frame` goes out of scope, the buffer goes back into the pool and the next `Acquire()` hands it out again. `Reserve()` allocates a few buffers up front, so playback never has to wait for the operating system.
+Build it the same way as `sum.cpp`. On Linux, add `-pthread`. Output:
 
-The pool is built for multiple threads. Each thread works in its own part of the pool, so they rarely get in each other's way, and a buffer can be returned from a different thread than the one that took it. That's exactly what happens when a decoder thread produces frames and a render thread displays them. A buffer may even outlive its pool; it's freed when it's destroyed.
+```
+Frames decoded:    1000
+Buffers allocated: 5
+```
 
-## Building your own extension
+A thousand frames of 3 MB each, and only five buffers were ever allocated. Every other frame reused one of them, which takes about 14 ns instead of the roughly 7 µs a new 3 MB allocation costs.
 
-The headers ship inside the wheel, so another Python extension can build against them. Add `aurivis-simd` to your build requirements:
+- A buffer can be returned from a different thread than the one that took it, as the renderer does here.
+- Each thread works in its own part of the pool, so threads rarely wait for each other.
+- `Reserve()` allocates buffers in advance, so playback never has to wait for the operating system.
+- A buffer may even outlive its pool. It's then freed when it's destroyed.
+- Buffers can be moved but not copied, so it's always clear which thread owns a frame. The memory isn't zeroed, because a decoder overwrites it anyway.
+
+If you just need one aligned buffer, use `AlignedBuffer<T>` like in `sum.cpp`. It's aligned to 64 bytes and frees itself when it goes out of scope.
+
+## Example: your own Python extension (Cython)
+
+The headers ship inside the wheel, so your own C++ extension can use them. Here is a complete project that sums float arrays with the fastest available version:
+
+```
+myproject/
+├── pyproject.toml
+├── setup.py
+└── myproject/
+    ├── __init__.py
+    ├── _native.pyx
+    └── kernels.hpp
+```
+
+`pyproject.toml` lists `aurivis-simd` as a build requirement, next to setuptools and Cython:
 
 ```toml
 [build-system]
-requires = ["setuptools", "Cython", "aurivis-simd"]
+requires = ["setuptools>=77", "Cython>=3.1", "aurivis-simd"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "myproject"
+version = "0.1.0"
+requires-python = ">=3.11"
+
+[tool.setuptools]
+packages = ["myproject"]
 ```
 
-Then pass the include directory to your extension. setuptools compiles `.pyx` files with Cython on its own:
+`setup.py` passes the include directory to the compiler. setuptools compiles the `.pyx` file with Cython on its own:
 
 ```python
+import sys
+
 import aurivis_simd
 from setuptools import Extension, setup
 
-setup(
-    ext_modules=[
-        Extension(
-            'mypackage._native',
-            ['mypackage/_native.pyx'],
-            include_dirs=[str(aurivis_simd.Headers.get_include())],
+class Build:
+    """Builds the native extension against the aurivis-simd headers."""
+
+    @staticmethod
+    def extensions() -> list[Extension]:
+        arguments = ['/std:c++20'] if sys.platform == 'win32' else ['-std=c++20']
+        native = Extension(
+            'myproject._native',
+            ['myproject/_native.pyx'],
+            include_dirs=[str(aurivis_simd.Headers.get_include()), 'myproject'],
             language='c++',
-            extra_compile_args=['/std:c++20']
+            extra_compile_args=arguments
         )
-    ]
-)
+        return [native]
+
+setup(ext_modules=Build.extensions())
 ```
 
-Use `-std=c++20` instead of `/std:c++20` with GCC and Clang. Since the headers are compiled into your extension, your users don't need `aurivis-simd` installed at runtime.
+`myproject/kernels.hpp` contains the C++ code with a plain and an AVX2 version:
 
-## Cython
+```cpp
+#pragma once
 
-You can use the C++ API directly from Cython with `cimport`:
+#include "Aurivis/Simd/Simd.hpp"
+
+#include <cstddef>
+
+#if AURIVIS_ARCH_X86_64
+#include <immintrin.h>
+#endif
+
+namespace MyProject {
+
+using SumFn = float (*)(const float* values, size_t count);
+
+inline float SumGeneric(const float* values, size_t count) {
+  float total = 0.0f;
+  for (size_t i = 0; i < count; ++i) {
+    total += values[i];
+  }
+  return total;
+}
+
+#if AURIVIS_ARCH_X86_64
+
+AURIVIS_TARGET_AVX2 inline float SumAvx2(const float* values, size_t count) {
+  __m256 total = _mm256_setzero_ps();
+  size_t i = 0;
+  for (; i + 8 <= count; i += 8) {
+    total = _mm256_add_ps(total, _mm256_load_ps(values + i));
+  }
+  alignas(32) float lanes[8];
+  _mm256_store_ps(lanes, total);
+  float sum = 0.0f;
+  for (const float lane : lanes) {
+    sum += lane;
+  }
+  for (; i < count; ++i) {
+    sum += values[i];
+  }
+  return sum;
+}
+
+inline const Aurivis::Simd::DispatchTable<SumFn> SUM{.generic = &SumGeneric, .avx2 = &SumAvx2};
+
+#else
+
+inline const Aurivis::Simd::DispatchTable<SumFn> SUM{.generic = &SumGeneric};
+
+#endif
+
+/** @brief Sums the values with the fastest implementation this machine supports. */
+inline float Sum(const float* values, size_t count) { return SUM.Select()(values, count); }
+
+}  // namespace MyProject
+```
+
+`myproject/_native.pyx` connects it to Python. It uses `cimport` to work with the C++ API directly:
 
 ```cython
-# distutils: language = c++
-
 from libcpp.utility cimport move
 
-from aurivis_simd.simd cimport AlignedBuffer, GetActiveLevel, Level
+from aurivis_simd.simd cimport AlignedBuffer, GetActiveLevel, LevelToString
 
-if GetActiveLevel() == Level.Avx2:
-    ...
+cdef extern from 'kernels.hpp' namespace 'MyProject' nogil:
+    float Sum(const float* values, size_t count)
 
-cdef AlignedBuffer[float] buffer
-buffer = move(AlignedBuffer[float](1024))
+class Native:
+    """Fast helpers written in C++."""
+
+    @staticmethod
+    def level() -> str:
+        """Returns the SIMD level the C++ code uses on this machine."""
+        return LevelToString(GetActiveLevel()).decode()
+
+    @staticmethod
+    def total(values) -> float:
+        """Sums a buffer of float32 values, e.g. an ``array('f')``."""
+        cdef const float[::1] view = values
+        cdef AlignedBuffer[float] buffer
+        cdef size_t i
+        cdef float result
+        buffer = move(AlignedBuffer[float](view.shape[0]))
+        for i in range(view.shape[0]):
+            buffer[i] = view[i]
+        with nogil:
+            result = Sum(buffer.GetData(), buffer.GetCount())
+        return result
 ```
 
-`AlignedBuffer` and `Pool.Buffer` can only be moved, so assign them with `move(...)`. Errors from C++ arrive as normal Python exceptions: an invalid alignment raises `ValueError`, running out of memory raises `MemoryError`.
+`myproject/__init__.py` exports it:
+
+```python
+from ._native import Native
+
+__all__ = ['Native']
+```
+
+Install the project and try it:
+
+```bash
+pip install .
+python -c "from array import array; from myproject import Native; print(Native.level(), Native.total(array('f', [i % 10 for i in range(1_000_000)])))"
+```
+
+```
+avx512 4500000.0
+```
+
+Two things to note about the Cython side:
+
+- `AlignedBuffer` and `Pool.Buffer` can only be moved, not copied, so assign them with `move(...)`.
+- Errors from C++ arrive as normal Python exceptions: an invalid alignment raises `ValueError`, running out of memory raises `MemoryError`.
+
+Since the headers are compiled into your extension, your users don't need `aurivis-simd` installed at runtime.
 
 ## Testing the fallbacks
 
-On a fast machine, you'd normally only ever run the fastest version of your code. The `AURIVIS_SIMD` environment variable lets you pretend the CPU is older:
+On a fast machine you'd normally only ever run the fastest version of your code. The `AURIVIS_SIMD` environment variable lets you pretend the CPU is older, so you can test the other versions too.
+
+PowerShell:
+
+```powershell
+$env:AURIVIS_SIMD = 'sse41'
+python cpu_info.py
+```
+
+Bash:
 
 ```bash
-AURIVIS_SIMD=generic python app.py
+AURIVIS_SIMD=sse41 python cpu_info.py
+```
+
+```
+Best level:   AVX512
+Active level: SSE41
+...
 ```
 
 Accepted values are `generic`, `sse41`, `avx2`, `avx512` and `neon`. The variable can only lower the level, never raise it beyond what the CPU supports, and invalid values are simply ignored. It's also useful in bug reports: if a problem goes away with `AURIVIS_SIMD=generic`, it's in one of the SIMD versions.
@@ -214,6 +496,8 @@ Each level stands for a set of instructions that all have to be present. The x86
 | `Avx2` | x86-64-v3: AVX, AVX2, FMA, BMI1, BMI2, F16C, LZCNT, MOVBE |
 | `Avx512` | x86-64-v4: AVX-512 F, BW, CD, DQ, VL |
 | `Neon` | ARMv8 Advanced SIMD |
+
+A feature only counts as available when the operating system supports it too. Some systems can disable AVX even though the CPU has it, and that case is handled for you.
 
 ## Benchmarks
 

@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=77", "Cython>=3.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aurivis-simd"
+version = "0.1.0"
+description = "CPU feature detection, runtime SIMD dispatch and aligned memory for C++20 and Python."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "Aurivis" }]
+keywords = ["simd", "cpu", "cpuid", "avx2", "avx512", "neon", "dispatch", "cython"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: C++",
+    "Programming Language :: Cython",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Topic :: Software Development :: Libraries",
+    "Topic :: System :: Hardware",
+    "Typing :: Typed"
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/Aurivis/aurivis-simd"
+Source = "https://github.com/Aurivis/aurivis-simd"
+Issues = "https://github.com/Aurivis/aurivis-simd/issues"
+
+[tool.setuptools]
+packages = ["aurivis_simd"]
+include-package-data = false
+
+[tool.setuptools.package-data]
+aurivis_simd = ["py.typed", "*.pyi", "*.pxd", "include/**/*.hpp"]
+
+[tool.cibuildwheel]
+build = "cp311-* cp312-* cp313-* cp314-*"
+skip = "*-win32 *_i686"
+test-requires = ["Cython", "setuptools"]
+test-sources = ["tests"]
+test-command = "python -m unittest discover -s tests -v"

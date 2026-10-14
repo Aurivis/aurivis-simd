@@ -3,7 +3,7 @@
 # aurivis-simd
 
 **CPU feature detection, runtime dispatch and aligned memory for SIMD code.**<br>
-Header-only C++20 with a small Python API. No runtime dependencies.
+Header-only C++20 with a small, fully typed Python API. No runtime dependencies.
 
 <br>
 
@@ -25,6 +25,7 @@ Header-only C++20 with a small Python API. No runtime dependencies.
 - Allocates SIMD-aligned memory with RAII buffers and a sharded, thread-safe buffer pool
 - Ships its headers inside the wheel, so other extensions can build against them
 - Provides Cython declarations for `cimport`
+- Fully typed Python API (`py.typed`, passes `mypy --strict`)
 
 ## Status
 
@@ -33,7 +34,7 @@ Header-only C++20 with a small Python API. No runtime dependencies.
 | x86 detection (SSE2 to AVX-512) | ✅ |
 | Dispatch tables | ✅ |
 | `AlignedBuffer`, `Pool` | ✅ |
-| Python API | ❌ |
+| Python API | ✅ |
 | ARM detection (NEON, dotprod, SVE, SVE2) | ❌ |
 | Portable vector types (`Vec128`, `Vec256`, `Vec512`) | ❌ |
 
@@ -49,10 +50,11 @@ Header-only C++20 with a small Python API. No runtime dependencies.
 
 ## Benchmarks
 
-Compared with [Google Highway](https://github.com/google/highway) 1.4.0.
-Intel Core i7-11700F, Windows 11, MSVC 2022, Release build. Median of 9 runs.
+Intel Core i7-11700F, Windows 11, MSVC 2022, Python 3.14, Release build. Median of 9 runs.
 
 ### Detection
+
+Compared with [Google Highway](https://github.com/google/highway) 1.4.0.
 
 | Operation | aurivis-simd | Highway |
 |---|---|---|
@@ -77,6 +79,15 @@ Intel Core i7-11700F, Windows 11, MSVC 2022, Release build. Median of 9 runs.
 | 1080p frame (3 MB) | 7.0 µs | **13.8 ns** | 7.2 µs |
 | 2 KB, 8 threads at once ⁴ | 41 ns | **2.2 ns** | – |
 
+### Python
+
+Compared with [NumPy](https://numpy.org) 2.5 and [py-cpuinfo](https://github.com/workhorsy/py-cpuinfo) 9.0.
+
+| Operation | aurivis-simd | NumPy | py-cpuinfo |
+|---|---|---|---|
+| Import and first query, fresh process | **10.4 ms** | 102 ms | 1,696 ms |
+| Repeated query, result kept | **9.8 ns** | 20.4 ns | 1,590 ms |
+
 ¹ Not measurable: as fast as an empty loop iteration (1.6 ns).<br>
 ² `hwy::SupportedTargets()` runs the detection again on every call. Highway caches its dispatch choice separately.<br>
 ³ The difference comes from the operating system mapping the code page on first use (about 1 µs), not from the detection itself. It is paid once per process.<br>
@@ -91,18 +102,25 @@ pip install aurivis-simd
 ## Python
 
 ```python
-import aurivis_simd
+from aurivis_simd import Cpu, Level
 
-aurivis_simd.detect()
-# Level.AVX2
+Cpu.best_level()
+# Level.AVX512
 
-aurivis_simd.active_level()
-# Level.AVX2, or lower if AURIVIS_SIMD is set
+Cpu.active_level()
+# Level.AVX2 if AURIVIS_SIMD=avx2 is set, otherwise the same as best_level()
 
-features = aurivis_simd.features()
+Cpu.supports(Level.AVX2)
+# True
+
+features = Cpu.features()
 features.avx2
 # True
 ```
+
+Detection runs once when the package is imported, so every call returns a cached result. In hot loops, keep the `CpuFeatures` object instead of calling `Cpu.features()` again.
+
+`CpuFeatures` and `IncludePath` are immutable. Every public name is typed, so IDEs and type checkers know all attributes and return types.
 
 ## Building against the headers
 
@@ -113,26 +131,26 @@ Add `aurivis-simd` to your build requirements:
 requires = ["setuptools", "Cython", "aurivis-simd"]
 ```
 
-Then pass the include directory to your extension:
+Then pass the include directory to your extension. setuptools compiles `.pyx` sources with Cython automatically:
 
 ```python
-from setuptools import Extension, setup
-
 import aurivis_simd
+from setuptools import Extension, setup
 
 setup(
     ext_modules=[
         Extension(
-            "mypackage._native",
-            ["mypackage/_native.pyx"],
-            include_dirs=[str(aurivis_simd.get_include())],
-            language="c++",
+            'mypackage._native',
+            ['mypackage/_native.pyx'],
+            include_dirs=[str(aurivis_simd.Headers.get_include())],
+            language='c++',
+            extra_compile_args=['/std:c++20']
         )
     ]
 )
 ```
 
-The headers are compiled into your extension, so `aurivis-simd` is not needed at runtime.
+Use `-std=c++20` instead of `/std:c++20` with GCC and Clang. The headers are compiled into your extension, so `aurivis-simd` is not needed at runtime.
 
 ## C++
 
@@ -201,11 +219,18 @@ The buffer goes back to the pool when `frame` goes out of scope, or when you cal
 ```cython
 # distutils: language = c++
 
-from aurivis_simd.simd cimport GetActiveLevel, Level
+from libcpp.utility cimport move
+
+from aurivis_simd.simd cimport AlignedBuffer, GetActiveLevel, Level
 
 if GetActiveLevel() == Level.Avx2:
     ...
+
+cdef AlignedBuffer[float] buffer
+buffer = move(AlignedBuffer[float](1024))
 ```
+
+`AlignedBuffer` and `Pool.Buffer` can only be moved, so assign them with `move(...)`. C++ exceptions become Python exceptions: `std::invalid_argument` raises `ValueError`, `std::bad_alloc` raises `MemoryError`.
 
 ## Limiting the SIMD level
 

@@ -70,9 +70,15 @@ struct CpuFeatures {
 
   /**
    * @brief Gets the highest level whose requirements are all met.
-   * @return Level::Neon on ARM, the matching x86 level, or Level::Generic if no level is fully supported.
+   * @return The matching ARM or x86 level, or Level::Generic if no level is fully supported.
    */
   constexpr Level GetBestLevel() const {
+    if (neon && sve && sve2) {
+      return Level::Sve2;
+    }
+    if (neon && sve) {
+      return Level::Sve;
+    }
     if (neon) {
       return Level::Neon;
     }

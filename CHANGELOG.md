@@ -2,6 +2,18 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Until 1.0, minor versions may still contain breaking changes.
 
+## [Unreleased]
+
+### Added
+
+- **ARM detection** of dotprod, FP16, BF16, I8MM, SVE and SVE2 on Linux, macOS and Windows. Like on x86, a feature only counts as available when the operating system supports it too.
+- **Levels** `Sve` and `Sve2`, with matching `sve` and `sve2` entries in `DispatchTable`, `Level.SVE` and `Level.SVE2` in Python, and `sve` and `sve2` as values for `AURIVIS_SIMD`.
+- **`AURIVIS_TARGET_SVE` and `AURIVIS_TARGET_SVE2`** for marking SVE functions with GCC and Clang.
+
+### Changed
+
+- On ARM machines with SVE, `GetBestLevel()` and `Cpu.best_level()` now return `Sve` or `Sve2` instead of `Neon`. To check for NEON, use `IsSupportedBy()` or `Cpu.supports(Level.NEON)` instead of comparing levels.
+
 ## [0.1.0] - 2026-10-15
 
 The first release. It covers everything needed for x86 SIMD code: finding out what the CPU can do, picking the fastest implementation and managing aligned memory.
@@ -26,4 +38,5 @@ The first release. It covers everything needed for x86 SIMD code: finding out wh
 - On ARM, only NEON is detected. Finer detection of dotprod, SVE and SVE2 will follow.
 - Portable vector types (`Vec128`, `Vec256`, `Vec512`) are not available yet.
 
+[Unreleased]: https://github.com/Aurivis/aurivis-simd/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/Aurivis/aurivis-simd/releases/tag/v0.1.0

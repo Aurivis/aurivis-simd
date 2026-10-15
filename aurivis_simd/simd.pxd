@@ -13,6 +13,8 @@ cdef extern from 'Aurivis/Simd/Simd.hpp' namespace 'Aurivis::Simd' nogil:
         Avx2
         Avx512
         Neon
+        Sve
+        Sve2
 
     cppclass CpuFeatures:
         bool sse2
@@ -104,5 +106,7 @@ cdef extern from 'Aurivis/Simd/Simd.hpp' namespace 'Aurivis::Simd' nogil:
         Fn avx2
         Fn avx512
         Fn neon
+        Fn sve
+        Fn sve2
         Fn Select()
         Fn SelectFor(Level level)

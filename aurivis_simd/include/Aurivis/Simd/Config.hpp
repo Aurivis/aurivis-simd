@@ -117,3 +117,15 @@
 
 // NEON is part of every ARMv8 CPU, so no attribute is needed.
 #define AURIVIS_TARGET_NEON
+
+// GCC only accepts extensions with a leading plus, Clang before version 16 only without. MSVC has no SVE intrinsics.
+#if AURIVIS_ARCH_ARM64 && AURIVIS_COMPILER_GCC
+#define AURIVIS_TARGET_SVE __attribute__((target("+sve")))
+#define AURIVIS_TARGET_SVE2 __attribute__((target("+sve2")))
+#elif AURIVIS_ARCH_ARM64 && AURIVIS_COMPILER_CLANG
+#define AURIVIS_TARGET_SVE __attribute__((target("sve")))
+#define AURIVIS_TARGET_SVE2 __attribute__((target("sve2")))
+#else
+#define AURIVIS_TARGET_SVE
+#define AURIVIS_TARGET_SVE2
+#endif

@@ -24,6 +24,7 @@ class HeadersTests(unittest.TestCase):
         'Pool.hpp',
         'Simd.hpp',
         os.path.join('Detail', 'AlignedAlloc.hpp'),
+        os.path.join('Detail', 'CpuArm.hpp'),
         os.path.join('Detail', 'CpuX86.hpp')
     )
 

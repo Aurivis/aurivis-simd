@@ -13,6 +13,7 @@ cdef extern from 'NativeTests.hpp' namespace 'Aurivis::Simd::Tests':
     string DetectionIsCached() except +
     string DispatchFallback() except +
     string DispatchSelect() except +
+    string TargetAttributes() except +
     string AlignedBufferBasics() except +
     string AlignedBufferErrors() except +
     string PoolReuse() except +
@@ -49,6 +50,10 @@ class NativeTests:
     @staticmethod
     def dispatch_select() -> str:
         return DispatchSelect().decode()
+
+    @staticmethod
+    def target_attributes() -> str:
+        return TargetAttributes().decode()
 
     @staticmethod
     def aligned_buffer_basics() -> str:

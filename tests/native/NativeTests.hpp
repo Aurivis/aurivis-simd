@@ -29,8 +29,20 @@ inline int DispatchGeneric(int value) noexcept { return value + 1; }
 inline int DispatchSse41(int value) noexcept { return value + 2; }
 inline int DispatchAvx2(int value) noexcept { return value + 3; }
 inline int DispatchAvx512(int value) noexcept { return value + 4; }
+inline int DispatchNeon(int value) noexcept { return value + 5; }
+inline int DispatchSve(int value) noexcept { return value + 6; }
+inline int DispatchSve2(int value) noexcept { return value + 7; }
 
 using DispatchFn = int (*)(int) noexcept;
+
+// One function per target attribute. Only the one Select() picks is ever called.
+AURIVIS_NOINLINE inline int TargetGeneric(int value) noexcept { return value + 1; }
+AURIVIS_TARGET_SSE41 AURIVIS_NOINLINE inline int TargetSse41(int value) noexcept { return value + 2; }
+AURIVIS_TARGET_AVX2 AURIVIS_NOINLINE inline int TargetAvx2(int value) noexcept { return value + 3; }
+AURIVIS_TARGET_AVX512 AURIVIS_NOINLINE inline int TargetAvx512(int value) noexcept { return value + 4; }
+AURIVIS_TARGET_NEON AURIVIS_NOINLINE inline int TargetNeon(int value) noexcept { return value + 5; }
+AURIVIS_TARGET_SVE AURIVIS_NOINLINE inline int TargetSve(int value) noexcept { return value + 6; }
+AURIVIS_TARGET_SVE2 AURIVIS_NOINLINE inline int TargetSve2(int value) noexcept { return value + 7; }
 
 }  // namespace Detail
 
@@ -45,18 +57,24 @@ inline std::string LevelNamesRoundTrip() {
   }
   Level parsed = Level::Generic;
   AURIVIS_CHECK(TryParseLevel("AVX2", parsed) && parsed == Level::Avx2);
+  AURIVIS_CHECK(TryParseLevel("Sve2", parsed) && parsed == Level::Sve2);
   AURIVIS_CHECK(!TryParseLevel("bogus", parsed));
   AURIVIS_CHECK(!TryParseLevel("", parsed));
   return {};
 }
 
-/** @brief IsSupportedBy() orders x86 levels and never mixes families. */
+/** @brief IsSupportedBy() orders the levels of each family and never mixes families. */
 inline std::string SupportRules() {
   AURIVIS_CHECK(IsSupportedBy(Level::Generic, Level::Neon));
   AURIVIS_CHECK(IsSupportedBy(Level::Sse41, Level::Avx512));
   AURIVIS_CHECK(!IsSupportedBy(Level::Avx512, Level::Avx2));
+  AURIVIS_CHECK(IsSupportedBy(Level::Neon, Level::Sve2));
+  AURIVIS_CHECK(IsSupportedBy(Level::Sve, Level::Sve2));
+  AURIVIS_CHECK(!IsSupportedBy(Level::Sve2, Level::Sve));
   AURIVIS_CHECK(!IsSupportedBy(Level::Neon, Level::Avx512));
+  AURIVIS_CHECK(!IsSupportedBy(Level::Sve, Level::Avx512));
   AURIVIS_CHECK(!IsSupportedBy(Level::Avx2, Level::Neon));
+  AURIVIS_CHECK(!IsSupportedBy(Level::Avx2, Level::Sve2));
   return {};
 }
 
@@ -75,8 +93,14 @@ inline std::string BestLevelMapping() {
   features.avx512f = features.avx512bw = features.avx512cd = features.avx512dq = features.avx512vl = true;
   AURIVIS_CHECK(features.GetBestLevel() == Level::Avx512);
   CpuFeatures arm;
-  arm.neon = true;
+  arm.neon = arm.neonFp16 = arm.dotProd = arm.i8mm = true;
   AURIVIS_CHECK(arm.GetBestLevel() == Level::Neon);
+  arm.sve2 = true;
+  AURIVIS_CHECK(arm.GetBestLevel() == Level::Neon);
+  arm.sve = true;
+  AURIVIS_CHECK(arm.GetBestLevel() == Level::Sve2);
+  arm.sve2 = false;
+  AURIVIS_CHECK(arm.GetBestLevel() == Level::Sve);
   return {};
 }
 
@@ -99,6 +123,15 @@ inline std::string DispatchFallback() {
   AURIVIS_CHECK(table.SelectFor(Level::Sse41) == &Detail::DispatchSse41);
   AURIVIS_CHECK(table.SelectFor(Level::Generic) == &Detail::DispatchGeneric);
   AURIVIS_CHECK(table.SelectFor(Level::Neon) == &Detail::DispatchGeneric);
+  AURIVIS_CHECK(table.SelectFor(Level::Sve2) == &Detail::DispatchGeneric);
+  const DispatchTable<Detail::DispatchFn> arm{.generic = &Detail::DispatchGeneric, .neon = &Detail::DispatchNeon, .sve2 = &Detail::DispatchSve2};
+  AURIVIS_CHECK(arm.SelectFor(Level::Sve2) == &Detail::DispatchSve2);
+  AURIVIS_CHECK(arm.SelectFor(Level::Sve) == &Detail::DispatchNeon);
+  AURIVIS_CHECK(arm.SelectFor(Level::Neon) == &Detail::DispatchNeon);
+  AURIVIS_CHECK(arm.SelectFor(Level::Avx512) == &Detail::DispatchGeneric);
+  const DispatchTable<Detail::DispatchFn> sveOnly{.generic = &Detail::DispatchGeneric, .sve = &Detail::DispatchSve};
+  AURIVIS_CHECK(sveOnly.SelectFor(Level::Sve2) == &Detail::DispatchSve);
+  AURIVIS_CHECK(sveOnly.SelectFor(Level::Neon) == &Detail::DispatchGeneric);
   return {};
 }
 
@@ -109,6 +142,16 @@ inline std::string DispatchSelect() {
   AURIVIS_CHECK(first == table.SelectFor(GetActiveLevel()));
   AURIVIS_CHECK(table.Select() == first);
   AURIVIS_CHECK(first(0) >= 1);
+  return {};
+}
+
+/** @brief Every target attribute compiles, and the function that Select() picks runs on this machine. */
+inline std::string TargetAttributes() {
+  const DispatchTable<Detail::DispatchFn> table{
+    .generic = &Detail::TargetGeneric, .sse41 = &Detail::TargetSse41, .avx2 = &Detail::TargetAvx2, .avx512 = &Detail::TargetAvx512, .neon = &Detail::TargetNeon, .sve = &Detail::TargetSve, .sve2 = &Detail::TargetSve2};
+  const Detail::DispatchFn expected = table.SelectFor(GetActiveLevel());
+  AURIVIS_CHECK(table.Select() == expected);
+  AURIVIS_CHECK(table.Select()(0) == expected(0));
   return {};
 }
 

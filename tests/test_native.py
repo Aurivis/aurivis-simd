@@ -36,7 +36,7 @@ class NativeBuild:
         from setuptools import Extension, setup
 
         output = tempfile.mkdtemp(prefix='aurivis-simd-native-tests-')
-        arguments = ['/std:c++20'] if sys.platform == 'win32' else ['-std=c++20']
+        arguments = ['/std:c++20'] if sys.platform == 'win32' else ['-std=c++20', '-Werror=ignored-attributes']
         extension = Extension(
             '_native_tests',
             [os.path.join(NativeBuild.DIRECTORY, '_native_tests.pyx')],
@@ -80,6 +80,9 @@ class NativeTests(unittest.TestCase):
 
     def test_dispatch_select(self) -> None:
         self.assertEqual(NativeTests.tests.dispatch_select(), '')
+
+    def test_target_attributes(self) -> None:
+        self.assertEqual(NativeTests.tests.target_attributes(), '')
 
     def test_aligned_buffer_basics(self) -> None:
         self.assertEqual(NativeTests.tests.aligned_buffer_basics(), '')

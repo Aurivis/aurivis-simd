@@ -14,7 +14,7 @@ class LevelTests(unittest.TestCase):
     """Tests for :class:`Level`."""
 
     def test_values_match_cpp(self) -> None:
-        self.assertEqual([level.value for level in Level], [0, 1, 2, 3, 16])
+        self.assertEqual([level.value for level in Level], [0, 1, 2, 3, 16, 17, 18])
 
     def test_generic_runs_everywhere(self) -> None:
         for active in Level:
@@ -26,13 +26,23 @@ class LevelTests(unittest.TestCase):
         self.assertFalse(Level.AVX512.is_supported_by(Level.AVX2))
         self.assertFalse(Level.SSE41.is_supported_by(Level.GENERIC))
 
+    def test_arm_levels_are_ordered(self) -> None:
+        self.assertTrue(Level.NEON.is_supported_by(Level.SVE2))
+        self.assertTrue(Level.SVE.is_supported_by(Level.SVE2))
+        self.assertFalse(Level.SVE2.is_supported_by(Level.SVE))
+        self.assertFalse(Level.SVE.is_supported_by(Level.NEON))
+
     def test_families_do_not_mix(self) -> None:
         self.assertFalse(Level.NEON.is_supported_by(Level.AVX512))
         self.assertFalse(Level.AVX2.is_supported_by(Level.NEON))
         self.assertTrue(Level.NEON.is_supported_by(Level.NEON))
+        self.assertFalse(Level.SVE2.is_supported_by(Level.AVX512))
+        self.assertFalse(Level.AVX512.is_supported_by(Level.SVE2))
 
     def test_is_arm(self) -> None:
         self.assertTrue(Level.NEON.is_arm)
+        self.assertTrue(Level.SVE.is_arm)
+        self.assertTrue(Level.SVE2.is_arm)
         self.assertFalse(Level.AVX512.is_arm)
         self.assertFalse(Level.GENERIC.is_arm)
 
@@ -69,8 +79,11 @@ class CpuFeaturesTests(unittest.TestCase):
         without_vl = CpuFeaturesTests.X86_V4 | {'avx512vl': False}
         self.assertIs(CpuFeatures(**without_vl).best_level(), Level.AVX2)
 
-    def test_neon_is_the_arm_level(self) -> None:
-        self.assertIs(CpuFeatures(neon=True).best_level(), Level.NEON)
+    def test_arm_levels(self) -> None:
+        self.assertIs(CpuFeatures(neon=True, dot_prod=True, i8mm=True).best_level(), Level.NEON)
+        self.assertIs(CpuFeatures(neon=True, sve=True).best_level(), Level.SVE)
+        self.assertIs(CpuFeatures(neon=True, sve=True, sve2=True).best_level(), Level.SVE2)
+        self.assertIs(CpuFeatures(neon=True, sve2=True).best_level(), Level.NEON)
 
     def test_level_checks(self) -> None:
         features = CpuFeatures(**CpuFeaturesTests.X86_V3)

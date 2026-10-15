@@ -47,6 +47,48 @@ class CpuTests(unittest.TestCase):
         else:
             self.skipTest(f'No baseline known for {machine}')
 
+class ArmDetectionTests(unittest.TestCase):
+    """Compares the ARM detection with what the operating system reports through other channels."""
+
+    @staticmethod
+    def is_arm64() -> bool:
+        return platform.machine().lower() in ('arm64', 'aarch64')
+
+    def test_features_are_consistent(self) -> None:
+        features = Cpu.features()
+        extensions = (features.neon_fp16, features.neon_bf16, features.dot_prod, features.i8mm, features.sve, features.sve2)
+        if not ArmDetectionTests.is_arm64():
+            self.assertFalse(features.neon or any(extensions))
+            return
+        self.assertTrue(features.neon)
+        self.assertTrue(features.sve or not features.sve2)
+
+    def test_linux_matches_proc_cpuinfo(self) -> None:
+        if sys.platform != 'linux' or not ArmDetectionTests.is_arm64():
+            self.skipTest('Only on Linux on ARM64')
+        with open('/proc/cpuinfo', encoding='utf-8') as file:
+            line = next((line for line in file if line.startswith('Features')), '')
+        flags = set(line.partition(':')[2].split())
+        if not flags:
+            self.skipTest('/proc/cpuinfo has no Features line')
+        features = Cpu.features()
+        self.assertEqual(features.neon_fp16, 'fphp' in flags and 'asimdhp' in flags)
+        self.assertEqual(features.neon_bf16, 'bf16' in flags)
+        self.assertEqual(features.dot_prod, 'asimddp' in flags)
+        self.assertEqual(features.i8mm, 'i8mm' in flags)
+        self.assertEqual(features.sve, 'sve' in flags)
+        self.assertEqual(features.sve2, 'sve2' in flags)
+
+    def test_apple_silicon(self) -> None:
+        if sys.platform != 'darwin' or not ArmDetectionTests.is_arm64():
+            self.skipTest('Only on Apple Silicon')
+        if int(platform.mac_ver()[0].split('.')[0]) < 12:
+            self.skipTest('macOS 11 does not report the detailed ARM features')
+        features = Cpu.features()
+        self.assertTrue(features.dot_prod)
+        self.assertTrue(features.neon_fp16)
+        self.assertFalse(features.sve)
+
 class LevelLimitTests(unittest.TestCase):
     """Tests for the ``AURIVIS_SIMD`` environment variable.
 
@@ -70,6 +112,11 @@ class LevelLimitTests(unittest.TestCase):
         if not Level.SSE41.is_supported_by(Cpu.best_level()):
             self.skipTest('This machine does not support SSE4.1')
         self.assertIs(LevelLimitTests.active_level_with('sse41'), Level.SSE41)
+
+    def test_neon_limit_on_sve(self) -> None:
+        if Cpu.best_level() not in (Level.SVE, Level.SVE2):
+            self.skipTest('This machine does not support SVE')
+        self.assertIs(LevelLimitTests.active_level_with('neon'), Level.NEON)
 
     def test_limit_never_raises_the_level(self) -> None:
         self.assertIs(LevelLimitTests.active_level_with('avx512'), Cpu.best_level())

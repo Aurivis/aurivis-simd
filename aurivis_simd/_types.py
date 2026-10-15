@@ -9,10 +9,11 @@ from __future__ import annotations
 import enum
 
 class Level(enum.Enum):
-    """SIMD instruction set levels, ordered from slowest to fastest within each architecture family.
+    """SIMD instruction set levels, ordered within each architecture family so that every level includes the ones below it.
 
-    The x86 levels follow the x86-64 microarchitecture levels v2, v3 and v4. Levels of
-    different families must not be compared by value. Use :meth:`is_supported_by` instead.
+    The x86 levels follow the x86-64 microarchitecture levels v2, v3 and v4. On ARM, every AArch64 CPU has NEON,
+    and SVE2 always comes with SVE. Levels of different families must not be compared by value.
+    Use :meth:`is_supported_by` instead.
     """
 
     _value_: int
@@ -22,6 +23,8 @@ class Level(enum.Enum):
     AVX2 = 2
     AVX512 = 3
     NEON = 16
+    SVE = 17
+    SVE2 = 18
 
     @property
     def is_arm(self) -> bool:
@@ -242,8 +245,12 @@ class CpuFeatures:
         Returns
         --------
         :class:`Level`
-            :attr:`Level.NEON` on ARM, the matching x86 level, or :attr:`Level.GENERIC`.
+            The matching ARM or x86 level, or :attr:`Level.GENERIC`.
         """
+        if self.neon and self.sve and self.sve2:
+            return Level.SVE2
+        if self.neon and self.sve:
+            return Level.SVE
         if self.neon:
             return Level.NEON
         if self.has_x86_v4:

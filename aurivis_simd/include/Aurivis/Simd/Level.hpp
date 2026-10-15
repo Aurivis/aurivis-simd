@@ -8,21 +8,23 @@
 namespace Aurivis::Simd {
 
 /**
- * @brief SIMD instruction set levels, ordered from slowest to fastest within each architecture family.
- * @details The x86 levels follow the x86-64 microarchitecture levels v2, v3 and v4. The numeric values separate the
- *          families: 1 to 15 are x86, 16 to 31 are ARM. Levels of different families must not be compared with
- *          < or >. Use IsSupportedBy() instead.
+ * @brief SIMD instruction set levels, ordered within each architecture family so that every level includes the ones below it.
+ * @details The x86 levels follow the x86-64 microarchitecture levels v2, v3 and v4. On ARM, every AArch64 CPU has NEON,
+ *          and SVE2 always comes with SVE. The numeric values separate the families: 1 to 15 are x86, 16 to 31 are
+ *          ARM. Levels of different families must not be compared with < or >. Use IsSupportedBy() instead.
  */
 enum class Level : uint8_t {
   Generic = 0,  // Plain C++, runs everywhere
   Sse41 = 1,    // x86-64-v2
   Avx2 = 2,     // x86-64-v3
   Avx512 = 3,   // x86-64-v4
-  Neon = 16     // ARMv8 Advanced SIMD
+  Neon = 16,    // ARMv8 Advanced SIMD
+  Sve = 17,     // Scalable Vector Extension
+  Sve2 = 18     // Scalable Vector Extension 2 (ARMv9)
 };
 
 /** @brief All levels in ascending order. */
-inline constexpr std::array<Level, 5> ALL_LEVELS = {Level::Generic, Level::Sse41, Level::Avx2, Level::Avx512, Level::Neon};
+inline constexpr std::array<Level, 7> ALL_LEVELS = {Level::Generic, Level::Sse41, Level::Avx2, Level::Avx512, Level::Neon, Level::Sve, Level::Sve2};
 
 namespace Detail {
 
@@ -79,6 +81,10 @@ constexpr const char* LevelToString(Level level) {
       return "avx512";
     case Level::Neon:
       return "neon";
+    case Level::Sve:
+      return "sve";
+    case Level::Sve2:
+      return "sve2";
     default:
       return "unknown";
   }

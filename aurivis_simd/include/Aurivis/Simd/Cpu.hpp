@@ -2,6 +2,7 @@
 
 #include "Aurivis/Simd/Config.hpp"
 #include "Aurivis/Simd/CpuFeatures.hpp"
+#include "Aurivis/Simd/Detail/CpuArm.hpp"
 #include "Aurivis/Simd/Detail/CpuX86.hpp"
 #include "Aurivis/Simd/Level.hpp"
 
@@ -41,9 +42,7 @@ inline CpuFeatures DetectFeatures() noexcept {
 #if AURIVIS_ARCH_X86_64
   return DetectX86();
 #elif AURIVIS_ARCH_ARM64
-  CpuFeatures features;
-  features.neon = true;  // NEON is mandatory on every AArch64 CPU
-  return features;
+  return DetectArm();
 #else
   return CpuFeatures{};
 #endif

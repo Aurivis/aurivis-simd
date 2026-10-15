@@ -18,7 +18,7 @@ Header-only C++20.
 
 ## Why this exists
 
-Modern CPUs can process many values with a single instruction. These are the SIMD instruction sets: SSE, AVX2, AVX-512 on Intel and AMD, NEON on ARM. Used well, they make code like video decoding, audio processing or parsing several times faster.
+Modern CPUs can process many values with a single instruction. These are the SIMD instruction sets: SSE, AVX2, AVX-512 on Intel and AMD, NEON and SVE on ARM. Used well, they make code like video decoding, audio processing or parsing several times faster.
 
 The catch is that not every CPU has the same instructions. If your program uses AVX-512 on a machine that doesn't support it, it crashes. So most projects either build for the oldest CPU and leave a lot of speed on the table, or ship separate builds for every machine.
 
@@ -34,7 +34,7 @@ It also comes with the memory tools that SIMD code needs: buffers aligned to 64 
 | Dispatch tables | ✅ |
 | `AlignedBuffer`, `Pool` | ✅ |
 | Python API | ✅ |
-| ARM detection (NEON, dotprod, SVE, SVE2) | ❌ |
+| ARM detection (NEON, dotprod, FP16, BF16, I8MM, SVE, SVE2) | ✅ |
 | Portable vector types (`Vec128`, `Vec256`, `Vec512`) | ❌ |
 
 ## Installation
@@ -66,6 +66,7 @@ class CpuReport:
         features = Cpu.features()
         print(f'AVX2 + FMA:       {features.avx2 and features.fma}')
         print(f'AVX-512 VNNI:     {features.avx512vnni}')
+        print(f'ARM dot product:  {features.dot_prod}')
 
 if __name__ == '__main__':
     CpuReport.show()
@@ -82,9 +83,12 @@ Active level: AVX512
   AVX2     yes
   AVX512   yes
   NEON     no
+  SVE      no
+  SVE2     no
 
 AVX2 + FMA:       True
 AVX-512 VNNI:     True
+ARM dot product:  False
 ```
 
 The detection runs once, when you import the package. After that, every call just returns the stored result, so you can call `Cpu.features()` as often as you like. In a hot loop it's still a little faster to keep the `features` object around.
@@ -206,7 +210,7 @@ A few things worth knowing:
 - You don't have to fill in every level. This table has no SSE4.1 entry, so an SSE4.1 machine falls back to `generic`, which is the only entry you must provide.
 - `Select()` makes the choice once and caches it in the table. Calling it every time costs about as much as a normal function call.
 - `SelectFor(Level::Generic)` returns a specific version. Here it checks that the fast version gives the same result as the plain one.
-- On ARM the SIMD versions aren't compiled at all, and the program just uses `SumGeneric`.
+- On ARM the SIMD versions aren't compiled at all, and the program just uses `SumGeneric`. For ARM code the table has `neon`, `sve` and `sve2` entries, and SVE functions are marked with `AURIVIS_TARGET_SVE` or `AURIVIS_TARGET_SVE2`. NEON needs no marking, every 64-bit ARM CPU has it.
 
 ## Example: reusing frame buffers across threads (C++)
 
@@ -483,7 +487,7 @@ Active level: SSE41
 ...
 ```
 
-Accepted values are `generic`, `sse41`, `avx2`, `avx512` and `neon`. The variable can only lower the level, never raise it beyond what the CPU supports, and invalid values are simply ignored. It's also useful in bug reports: if a problem goes away with `AURIVIS_SIMD=generic`, it's in one of the SIMD versions.
+Accepted values are `generic`, `sse41`, `avx2`, `avx512`, `neon`, `sve` and `sve2`. The variable can only lower the level, never raise it beyond what the CPU supports, and invalid values are simply ignored. It's also useful in bug reports: if a problem goes away with `AURIVIS_SIMD=generic`, it's in one of the SIMD versions.
 
 ## Levels
 
@@ -495,9 +499,13 @@ Each level stands for a set of instructions that all have to be present. The x86
 | `Sse41` | x86-64-v2: SSE3, SSSE3, SSE4.1, SSE4.2, POPCNT |
 | `Avx2` | x86-64-v3: AVX, AVX2, FMA, BMI1, BMI2, F16C, LZCNT, MOVBE |
 | `Avx512` | x86-64-v4: AVX-512 F, BW, CD, DQ, VL |
-| `Neon` | ARMv8 Advanced SIMD |
+| `Neon` | ARMv8 Advanced SIMD, present on every 64-bit ARM CPU |
+| `Sve` | Scalable Vector Extension, e.g. AWS Graviton 3 |
+| `Sve2` | SVE2, e.g. ARMv9 chips like Graviton 4 or Microsoft Cobalt 100 |
 
-A feature only counts as available when the operating system supports it too. Some systems can disable AVX even though the CPU has it, and that case is handled for you.
+On ARM, the levels only say whether NEON, SVE or SVE2 is there. The smaller extensions come in different combinations on different chips, so they're reported as single features in `CpuFeatures` and you check them yourself: `dot_prod` for int8 dot products, `i8mm` for int8 matrix multiplication, `neon_fp16` for half-precision math and `neon_bf16` for bfloat16. Apple chips have dot products and FP16 from the M1 on, BF16 and I8MM from the M2 on, and no SVE.
+
+A feature only counts as available when the operating system supports it too. Some systems can disable AVX even though the CPU has it, and that case is handled for you. ARM CPUs don't let normal programs read their feature registers everywhere, so on ARM aurivis-simd asks the operating system instead: the auxiliary vector on Linux, `sysctl` on macOS and `IsProcessorFeaturePresent` on Windows. SVE is only reported when the system also saves the SVE registers. macOS 11 doesn't report the details, so there you only get NEON.
 
 ## Benchmarks
 
@@ -549,7 +557,7 @@ python setup.py build_ext --inplace
 python -m unittest discover -s tests -v
 ```
 
-The tests cover the Python API, the `AURIVIS_SIMD` variable and the C++ headers. The C++ part is compiled on the fly, so you need Cython, setuptools and a C++20 compiler.
+The tests cover the Python API, the `AURIVIS_SIMD` variable and the C++ headers. On ARM they also compare the detection with what the system reports elsewhere, for example `/proc/cpuinfo` on Linux. The C++ part is compiled on the fly, so you need Cython, setuptools and a C++20 compiler.
 
 The C++ benchmarks need CMake and download Highway automatically. The Python benchmark compares against NumPy and py-cpuinfo if they're installed:
 

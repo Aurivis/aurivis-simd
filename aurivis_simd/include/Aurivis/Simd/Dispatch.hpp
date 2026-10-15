@@ -26,6 +26,8 @@ struct DispatchTable {
   Fn avx2 = nullptr;
   Fn avx512 = nullptr;
   Fn neon = nullptr;
+  Fn sve = nullptr;
+  Fn sve2 = nullptr;
 
   // Internal cache filled by Select(). Leave it out of the initializer.
   mutable std::atomic<Fn> cachedSelection{nullptr};
@@ -52,11 +54,17 @@ struct DispatchTable {
    * @return The best non-null implementation not above level, or generic.
    */
   constexpr Fn SelectFor(Level level) const noexcept {
-    if (level == Level::Neon) {
+    // Within each family the values are ordered: Generic 0, Sse41 1, Avx2 2, Avx512 3 and Neon 16, Sve 17, Sve2 18.
+    const auto rank = static_cast<uint8_t>(level);
+    if (Detail::IsArmFamily(level)) {
+      if (rank >= static_cast<uint8_t>(Level::Sve2) && sve2 != nullptr) {
+        return sve2;
+      }
+      if (rank >= static_cast<uint8_t>(Level::Sve) && sve != nullptr) {
+        return sve;
+      }
       return neon != nullptr ? neon : generic;
     }
-    // Only x86 levels remain, and their values are ordered: Generic 0, Sse41 1, Avx2 2, Avx512 3.
-    const auto rank = static_cast<uint8_t>(level);
     if (rank >= static_cast<uint8_t>(Level::Avx512) && avx512 != nullptr) {
       return avx512;
     }

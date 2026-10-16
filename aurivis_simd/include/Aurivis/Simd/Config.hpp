@@ -99,16 +99,28 @@
 
 // --- SIMD Target Attributes ---
 
+/** @brief Feature lists of the x86 levels for GCC and Clang. They match the x86-64-v2, v3 and v4 levels. */
+#define AURIVIS_FEATURES_SSE41 "sse3,ssse3,sse4.1,sse4.2,popcnt"
+#define AURIVIS_FEATURES_AVX2 "sse3,ssse3,sse4.1,sse4.2,popcnt,avx,avx2,fma,bmi,bmi2,f16c,lzcnt,movbe"
+
+// Clang 18 moved the 512-bit registers into a feature of their own, evex512, that AVX-512 code has to request as well.
+// Apple counts its Clang versions differently, Apple Clang 17 is the first one based on Clang 18 or newer.
+#if AURIVIS_COMPILER_CLANG && ((defined(__apple_build_version__) && __clang_major__ >= 17) || (!defined(__apple_build_version__) && __clang_major__ >= 18))
+#define AURIVIS_FEATURES_AVX512 "sse3,ssse3,sse4.1,sse4.2,popcnt,avx,avx2,fma,bmi,bmi2,f16c,lzcnt,movbe,avx512f,avx512bw,avx512cd,avx512dq,avx512vl,evex512"
+#else
+#define AURIVIS_FEATURES_AVX512 "sse3,ssse3,sse4.1,sse4.2,popcnt,avx,avx2,fma,bmi,bmi2,f16c,lzcnt,movbe,avx512f,avx512bw,avx512cd,avx512dq,avx512vl"
+#endif
+
 /**
  * @brief Marks a function that may use the instructions of a specific SIMD level.
  * @details GCC and Clang (including clang-cl) only allow intrinsics of a level inside functions that carry the matching
  *          target attribute, unless the whole file is compiled for that level. MSVC allows all intrinsics everywhere,
- *          so the macros are empty there. The feature lists match the x86-64-v2, v3 and v4 levels.
+ *          so the macros are empty there.
  */
 #if AURIVIS_ARCH_X86_64 && !AURIVIS_COMPILER_MSVC
-#define AURIVIS_TARGET_SSE41 __attribute__((target("sse3,ssse3,sse4.1,sse4.2,popcnt")))
-#define AURIVIS_TARGET_AVX2 __attribute__((target("sse3,ssse3,sse4.1,sse4.2,popcnt,avx,avx2,fma,bmi,bmi2,f16c,lzcnt,movbe")))
-#define AURIVIS_TARGET_AVX512 __attribute__((target("sse3,ssse3,sse4.1,sse4.2,popcnt,avx,avx2,fma,bmi,bmi2,f16c,lzcnt,movbe,avx512f,avx512bw,avx512cd,avx512dq,avx512vl")))
+#define AURIVIS_TARGET_SSE41 __attribute__((target(AURIVIS_FEATURES_SSE41)))
+#define AURIVIS_TARGET_AVX2 __attribute__((target(AURIVIS_FEATURES_AVX2)))
+#define AURIVIS_TARGET_AVX512 __attribute__((target(AURIVIS_FEATURES_AVX512)))
 #else
 #define AURIVIS_TARGET_SSE41
 #define AURIVIS_TARGET_AVX2
@@ -129,3 +141,29 @@
 #define AURIVIS_TARGET_SVE
 #define AURIVIS_TARGET_SVE2
 #endif
+
+// --- SIMD Target Regions ---
+
+/** @brief Turns its argument into a pragma, so that pragmas can be written inside macros. */
+#define AURIVIS_PRAGMA(text) _Pragma(#text)
+#define AURIVIS_PRAGMA_EXPANDED(text) AURIVIS_PRAGMA(text)
+
+/**
+ * @brief Compiles everything between AURIVIS_PUSH_TARGET_* and AURIVIS_POP_TARGET for a specific x86 level.
+ * @details Works like putting the matching AURIVIS_TARGET_* macro on every function in between, including templates and
+ *          member functions. Regions must not be nested. MSVC and ARM need no regions, so the macros are empty there.
+ */
+#if AURIVIS_ARCH_X86_64 && AURIVIS_COMPILER_CLANG
+#define AURIVIS_PUSH_TARGET(features) AURIVIS_PRAGMA_EXPANDED(clang attribute push(__attribute__((target(features))), apply_to = function))
+#define AURIVIS_POP_TARGET AURIVIS_PRAGMA(clang attribute pop)
+#elif AURIVIS_ARCH_X86_64 && AURIVIS_COMPILER_GCC
+#define AURIVIS_PUSH_TARGET(features) AURIVIS_PRAGMA(GCC push_options) AURIVIS_PRAGMA_EXPANDED(GCC target(features))
+#define AURIVIS_POP_TARGET AURIVIS_PRAGMA(GCC pop_options)
+#else
+#define AURIVIS_PUSH_TARGET(features)
+#define AURIVIS_POP_TARGET
+#endif
+
+#define AURIVIS_PUSH_TARGET_SSE41 AURIVIS_PUSH_TARGET(AURIVIS_FEATURES_SSE41)
+#define AURIVIS_PUSH_TARGET_AVX2 AURIVIS_PUSH_TARGET(AURIVIS_FEATURES_AVX2)
+#define AURIVIS_PUSH_TARGET_AVX512 AURIVIS_PUSH_TARGET(AURIVIS_FEATURES_AVX512)
